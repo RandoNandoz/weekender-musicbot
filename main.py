@@ -3,11 +3,14 @@ Discord bot
 """
 
 import datetime
+import random
 from collections import deque
 from os import environ
 
 import discord
+import pymongo
 import wavelink
+from discord import option
 
 bot = discord.Bot(command_prefix='/', debug_guilds=[1037132604408860732])
 
@@ -28,7 +31,6 @@ async def connect_nodes():
         password='youshallnotpass'
     )
 
-
 @bot.event
 async def on_ready():
     await connect_nodes()
@@ -42,6 +44,7 @@ async def on_wavelink_node_ready(node: wavelink.Node):
 
 
 @bot.slash_command(name='play', description='Play a song.')
+@option(name='query', description='Searches YouTube for a song name, or a YouTube link to a song.', required=True)
 async def play(ctx, *, query: str):
     global now_playing
     voice_client = ctx.voice_client
@@ -85,7 +88,8 @@ async def status(ctx):
             color=discord.Color.blurple(),
         )
         embed.add_field(name='Position: ',
-                        value=datetime.datetime.utcfromtimestamp(ctx.voice_client.position).strftime('%M:%S'))
+                        value=datetime.datetime.utcfromtimestamp(ctx.voice_client.position).strftime(
+                            '%M:%S') if ctx.voice_client.position else 'PAUSED')
         embed.add_field(name='Duration', value=datetime.datetime.utcfromtimestamp(now_playing.length).strftime('%M:%S'))
         embed.add_field(name='Requested by', value=ctx.author.mention)
         embed.add_field(name='Next', value='Nothing' if not music_queue else music_queue[0].title)
@@ -118,9 +122,11 @@ async def resume(ctx):
     if not voice_client:
         await ctx.respond('I am not connected to a voice channel.')
         return
-    if not voice_client.is_paused:
+
+    if voice_client.is_playing:
         await ctx.respond('I am not paused.')
         return
+
     await voice_client.resume()
     await ctx.respond('Resumed.')
     await status(ctx)
@@ -140,7 +146,40 @@ async def show_queue(ctx):
     await ctx.respond(embed=embed)
 
 
+@bot.slash_command(name='remove_queue', description='Remove a song from the queue.')
+@option(name='index', description='The position of the song to remove.', required=True)
+async def remove_queue(ctx, index: int):
+    if len(music_queue) == 0:
+        await ctx.respond('The queue is empty.')
+        return
+    if index > len(music_queue):
+        await ctx.respond('The index is out of range.')
+        return
+    song = music_queue[index - 1]
+    music_queue.remove(song)
+    await ctx.respond(f'Removed `{song.title}` from the queue.')
+
+
+@bot.slash_command(name='swap_queue', description='Swap two songs in the queue.')
+@option(name='index1', description='The position of the first song to swap.', required=True)
+@option(name='index2', description='The position of the second song to swap.', required=True)
+async def swap_queue(ctx, index1: int, index2: int):
+    if len(music_queue) == 0:
+        await ctx.respond('The queue is empty.')
+        return
+    if index1 > len(music_queue) or index2 > len(music_queue):
+        await ctx.respond('One of the indexes is out of range.')
+        return
+    song1 = music_queue[index1 - 1]
+    song2 = music_queue[index2 - 1]
+    music_queue[index1 - 1] = song2
+    music_queue[index2 - 1] = song1
+    await ctx.respond(f'Swapped `{song1.title}` with `{song2.title}`.')
+
+
+
 @bot.slash_command(name='add', description='Add a song to the queue.')
+@option(name='query', description='Searches YouTube for a song name, or a YouTube link to a song.', required=True)
 async def add(ctx, *, query: str):
     song = await wavelink.YouTubeTrack.search(query=query, return_first=True)
     if not song:
@@ -148,6 +187,23 @@ async def add(ctx, *, query: str):
         return
     music_queue.append(song)
     await ctx.respond(f'Added {song.title} to the queue.')
+
+
+@bot.slash_command(name='add_top', description='Add a song to the top of the queue.')
+@option(name='query', description='Searches YouTube for a song name, or a YouTube link to a song.', required=True)
+async def add_top(ctx, *, query: str):
+    song = await wavelink.YouTubeTrack.search(query=query, return_first=True)
+    if not song:
+        await ctx.respond('No results found.')
+        return
+    music_queue.insert(0, song)
+    await ctx.respond(f'Added {song.title} to the top of the queue.')
+
+
+@bot.slash_command(name='shuffle', description='Shuffle the queue.')
+async def shuffle(ctx):
+    random.shuffle(music_queue)
+    await ctx.respond('Shuffled the queue.')
 
 
 @bot.slash_command(name='skip', description='Skip the current song.')
@@ -167,6 +223,7 @@ async def skip(ctx):
         await play(ctx, query=now_playing.title)
     except IndexError:
         now_playing = None
+        await disconnect(ctx)
 
 
 @bot.slash_command(name='stop', description='Stop the current song and clears the queue.')
@@ -185,12 +242,22 @@ async def stop(ctx):
     music_queue.clear()
 
 
-@bot.slash_command(name='disconnect', description='Disconnect the bot from the voice channel.')
+@bot.slash_command(name='start_queue', description='Start the queue.')
+async def start_queue(ctx):
+    global now_playing
+    if not now_playing:
+        try:
+            now_playing = music_queue.popleft()
+            await play(ctx, query=now_playing.title)
+        except IndexError:
+            await ctx.respond('The queue is empty.')
+    else:
+        await ctx.respond('The queue is already playing.')
+
+
+@bot.slash_command(name='disconnect', description='Disconnect the bot from the voice channel and stop whatever is currently playing.')
 async def disconnect(ctx):
     voice_client = ctx.voice_client
-    if not voice_client:
-        await ctx.respond('I am not connected to a voice channel.')
-        return
     await voice_client.disconnect(force=True)
     await ctx.respond('Disconnected.')
 
