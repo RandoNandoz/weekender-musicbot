@@ -2,8 +2,6 @@
 
 | Command       | Description                               |
 |---------------|-------------------------------------------|
-| `/help`       | Display help information                  |
-| `/version`    | Display version information               |
 | `/play`       | Play a song                               |
 | `/skip`       | Skip the current song                     |
 | `/stop`       | Stop playing and clear the queue          |

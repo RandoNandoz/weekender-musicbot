@@ -8,9 +8,9 @@ from collections import deque
 from os import environ
 
 import discord
-import pymongo
 import wavelink
 from discord import option
+from wavelink.ext import spotify
 
 bot = discord.Bot(command_prefix='/', debug_guilds=[1037132604408860732])
 
@@ -28,8 +28,13 @@ async def connect_nodes():
         bot=bot,
         host='127.0.0.1',
         port=2333,
-        password='youshallnotpass'
+        password='youshallnotpass',
+        spotify_client=spotify.SpotifyClient(
+            client_id=environ.get('SPOTIFY_CLIENT_ID'),
+            client_secret=environ.get('SPOTIFY_CLIENT_SECRET')
+        )
     )
+
 
 @bot.event
 async def on_ready():
@@ -78,9 +83,67 @@ async def play(ctx, *, query: str):
     await ctx.respond(embed=embed)
 
 
+@bot.slash_command(name='play_spotify', description='Play a song from Spotify.')
+@option(name='query', description='Plays a specific spotify song link', required=True)
+async def play_spotify(ctx, *, query: str):
+    global now_playing
+    voice_client = ctx.voice_client
+
+    if not voice_client:
+        voice_client = await ctx.author.voice.channel.connect(cls=wavelink.Player)
+
+    if ctx.author.voice.channel.id != voice_client.channel.id:
+        await voice_client.disconnect(force=True)
+        voice_client = await ctx.author.voice.channel.connect(cls=wavelink.Player)
+
+    try:
+        song = await spotify.SpotifyTrack.search(query=query, return_first=True)
+    except spotify.SpotifyRequestError:
+        await ctx.respond('No results found.')
+        return
+    now_playing = song
+
+    if not song:
+        await ctx.respond('No results found.')
+        return
+
+    embed = discord.Embed(
+        title='Currently playing',
+        description=f'[{song.title}]({song.uri})',
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name='Position: ', value='0:00')
+    embed.add_field(name='Duration', value=datetime.datetime.utcfromtimestamp(song.length).strftime('%M:%S'))
+    embed.add_field(name='Requested by', value=ctx.author.mention)
+    embed.add_field(name='Next', value='Nothing' if not music_queue else music_queue[0].title)
+    embed.set_thumbnail(url=song.thumbnail)
+
+    await voice_client.play(song)
+    await ctx.respond(embed=embed)
+
+
+@bot.slash_command(name='queue_spotify',
+                   description='Add a playlist/album from Spotify to the queue. May be slow with large playlists.')
+@option(name='query', description='A specific spotify playlist or album link', required=True)
+@option(name='shuffle_pl', description='Shuffles the album/playlist', required=False)
+async def queue_spotify(ctx, *, query: str, shuffle_pl: bool = False):
+    tracks = []
+    new_queue = deque()
+    await ctx.defer()
+    try:
+        tracks = await spotify.SpotifyTrack.search(query=query)
+    except spotify.SpotifyRequestError:
+        ctx.followup.send('Invalid Spotify link. If this a personal playlist, your playlist & profile must be public.')
+    for track in tracks:
+        new_queue.append(track)
+    if shuffle_pl:
+        random.shuffle(new_queue)
+    music_queue.extend(new_queue)
+    await ctx.followup.send(f'Added {len(tracks)} songs from the to the queue.')
+
+
 @bot.slash_command(name='status', description='Get the current status of the bot.')
 async def status(ctx):
-    embed = None
     if now_playing is not None:
         embed = discord.Embed(
             title='Current Song',
@@ -108,7 +171,7 @@ async def pause(ctx):
     if not voice_client:
         await ctx.respond('I am not connected to a voice channel.')
         return
-    if not voice_client.is_playing:
+    if not voice_client.is_playing():
         await ctx.respond('I am not playing anything.')
         return
     await voice_client.pause()
@@ -123,10 +186,6 @@ async def resume(ctx):
         await ctx.respond('I am not connected to a voice channel.')
         return
 
-    if voice_client.is_playing:
-        await ctx.respond('I am not paused.')
-        return
-
     await voice_client.resume()
     await ctx.respond('Resumed.')
     await status(ctx)
@@ -137,18 +196,29 @@ async def show_queue(ctx):
     if len(music_queue) == 0:
         await ctx.respond('The queue is empty.')
         return
-    embed = discord.Embed(
-        title='Queue',
-        color=discord.Color.blurple(),
-    )
-    for i, song in enumerate(music_queue):
-        embed.add_field(name=f'{i + 1}. {song.title}', value=f'[{song.uri}]({song.uri})', inline=False)
-    await ctx.respond(embed=embed)
+    # embed = discord.Embed(
+    #     title='Queue',
+    #     color=discord.Color.blurple(),
+    # )
+    # for i, song in enumerate(music_queue):
+    #     embed.add_field(name=f'{i + 1}. {song.title}', value=f'[{song.uri}]({song.uri})', inline=False)
+    # await ctx.respond(embed=embed)
+    embeds = []
+    for i in range(len(music_queue) // 25):
+        embed = discord.Embed(
+            title=f'Queue pg. {i + 1}',
+            color=discord.Color.blurple(),
+        )
+        for j in range(i * 25, (i + 1) * 25):
+            embed.add_field(name=f'{j + 1}. {music_queue[j].title}',
+                            value=f'[{music_queue[j].uri}]({music_queue[j].uri})', inline=False)
+        embeds.append(embed)
+    [await ctx.respond(embed=embed) for embed in embeds]
 
 
-@bot.slash_command(name='remove_queue', description='Remove a song from the queue.')
+@bot.slash_command(name='remove', description='Remove a song from the queue.')
 @option(name='index', description='The position of the song to remove.', required=True)
-async def remove_queue(ctx, index: int):
+async def remove(ctx, index: int):
     if len(music_queue) == 0:
         await ctx.respond('The queue is empty.')
         return
@@ -158,6 +228,16 @@ async def remove_queue(ctx, index: int):
     song = music_queue[index - 1]
     music_queue.remove(song)
     await ctx.respond(f'Removed `{song.title}` from the queue.')
+
+
+@bot.slash_command(name='remove_duplicates', description='Remove duplicate songs from the queue.')
+async def remove_duplicates(ctx):
+    global music_queue
+    if len(music_queue) == 0:
+        await ctx.respond('The queue is empty.')
+        return
+    music_queue = deque(dict.fromkeys(music_queue))
+    await ctx.respond('Removed duplicate songs from the queue.')
 
 
 @bot.slash_command(name='swap_queue', description='Swap two songs in the queue.')
@@ -175,7 +255,6 @@ async def swap_queue(ctx, index1: int, index2: int):
     music_queue[index1 - 1] = song2
     music_queue[index2 - 1] = song1
     await ctx.respond(f'Swapped `{song1.title}` with `{song2.title}`.')
-
 
 
 @bot.slash_command(name='add', description='Add a song to the queue.')
@@ -213,7 +292,7 @@ async def skip(ctx):
     if not voice_client:
         await ctx.respond('I am not connected to a voice channel.')
         return
-    if not voice_client.is_playing:
+    if not voice_client.is_playing():
         await ctx.respond('I am not playing anything.')
         return
     await voice_client.stop()
@@ -232,7 +311,7 @@ async def stop(ctx):
     if not voice_client:
         await ctx.respond('I am not connected to a voice channel.')
         return
-    if not voice_client.is_playing:
+    if not voice_client.is_playing():
         await ctx.respond('I am not playing anything.')
         return
     await voice_client.stop()
@@ -255,36 +334,12 @@ async def start_queue(ctx):
         await ctx.respond('The queue is already playing.')
 
 
-@bot.slash_command(name='disconnect', description='Disconnect the bot from the voice channel and stop whatever is currently playing.')
+@bot.slash_command(name='disconnect',
+                   description='Disconnect the bot from the voice channel and stop whatever is currently playing.')
 async def disconnect(ctx):
     voice_client = ctx.voice_client
     await voice_client.disconnect(force=True)
     await ctx.respond('Disconnected.')
-
-
-@bot.slash_command(name='help', description='Get help with the bot.')
-async def help(ctx):
-    embed = discord.Embed(
-        title='Help',
-        color=discord.Color.blurple(),
-    )
-    embed.add_field(name='play', value='Play a song.')
-    embed.add_field(name='status', value='Get the current status of the bot.')
-    embed.add_field(name='pause', value='Pause the current song.')
-    embed.add_field(name='resume', value='Resume the current song.')
-    embed.add_field(name='show_queue', value='Display the current queue.')
-    embed.add_field(name='add', value='Add a song to the queue.')
-    embed.add_field(name='skip', value='Skip the current song.')
-    embed.add_field(name='stop', value='Stop the current song and clears the queue.')
-    embed.add_field(name='disconnect', value='Disconnect the bot from the voice channel.')
-    embed.add_field(name='help', value='Get help with the bot.')
-    embed.add_field(name='version', value='Get the version of the bot.')
-    await ctx.respond(embed=embed)
-
-
-@bot.slash_command(name='version', description='Get the version of the bot.')
-async def version(ctx):
-    await ctx.respond('Version 0.0.1-pre-alpha')
 
 
 bot.run(environ['DISCORD_TOKEN'])
