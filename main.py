@@ -48,6 +48,17 @@ async def on_wavelink_node_ready(node: wavelink.Node):
     print(f"{node.identifier} is ready.")  # print a message
 
 
+@bot.event
+async def on_wavelink_track_end(player: wavelink.Player, track: wavelink.Track, reason):
+    global now_playing
+    if reason == 'FINISHED':
+        if music_queue:
+            now_playing = music_queue.popleft()
+            await bot.voice_clients[0].play(now_playing)
+        else:
+            [await v.disconnect(force=True) for v in bot.voice_clients]
+
+
 @bot.slash_command(name='play', description='Play a song.')
 @option(name='query', description='Searches YouTube for a song name, or a YouTube link to a song.', required=True)
 async def play(ctx, *, query: str):
@@ -133,13 +144,14 @@ async def queue_spotify(ctx, *, query: str, shuffle_pl: bool = False):
     try:
         tracks = await spotify.SpotifyTrack.search(query=query)
     except spotify.SpotifyRequestError:
-        ctx.followup.send('Invalid Spotify link. If this a personal playlist, your playlist & profile must be public.')
+        await ctx.followup.send(
+            'Invalid Spotify link. If this a personal playlist, your playlist & profile must be public.')
     for track in tracks:
         new_queue.append(track)
     if shuffle_pl:
         random.shuffle(new_queue)
     music_queue.extend(new_queue)
-    await ctx.followup.send(f'Added {len(tracks)} songs from the to the queue.')
+    await ctx.followup.send(f'Added {len(tracks)} songs to the queue.')
 
 
 @bot.slash_command(name='status', description='Get the current status of the bot.')
@@ -193,27 +205,16 @@ async def resume(ctx):
 
 @bot.slash_command(name='show_queue', description='Display the current queue.')
 async def show_queue(ctx):
-    if len(music_queue) == 0:
-        await ctx.respond('The queue is empty.')
+    if not music_queue:
+        await ctx.respond('Queue is empty.')
         return
-    # embed = discord.Embed(
-    #     title='Queue',
-    #     color=discord.Color.blurple(),
-    # )
-    # for i, song in enumerate(music_queue):
-    #     embed.add_field(name=f'{i + 1}. {song.title}', value=f'[{song.uri}]({song.uri})', inline=False)
-    # await ctx.respond(embed=embed)
-    embeds = []
-    for i in range(len(music_queue) // 25):
-        embed = discord.Embed(
-            title=f'Queue pg. {i + 1}',
-            color=discord.Color.blurple(),
-        )
-        for j in range(i * 25, (i + 1) * 25):
-            embed.add_field(name=f'{j + 1}. {music_queue[j].title}',
-                            value=f'[{music_queue[j].uri}]({music_queue[j].uri})', inline=False)
-        embeds.append(embed)
-    [await ctx.respond(embed=embed) for embed in embeds]
+    embed = discord.Embed(
+        title=f'Queue (Total items: {len(music_queue)})',
+        color=discord.Color.blurple(),
+    )
+    for i, song in enumerate(music_queue):
+        embed.add_field(name=f'{i + 1}. {song.title}', value=f'[{song.uri}]({song.uri})', inline=False)
+    await ctx.respond(embed=embed)
 
 
 @bot.slash_command(name='remove', description='Remove a song from the queue.')
@@ -338,7 +339,11 @@ async def start_queue(ctx):
                    description='Disconnect the bot from the voice channel and stop whatever is currently playing.')
 async def disconnect(ctx):
     voice_client = ctx.voice_client
-    await voice_client.disconnect(force=True)
+    if voice_client is not None:
+        await voice_client.disconnect(force=True)
+    else:
+        await ctx.respond('I am not connected to a voice channel.')
+        return
     await ctx.respond('Disconnected.')
 
 
