@@ -66,7 +66,11 @@ async def play(ctx, *, query: str):
     voice_client = ctx.voice_client
 
     if not voice_client:
-        voice_client = await ctx.author.voice.channel.connect(cls=wavelink.Player)
+        try:
+            voice_client = await ctx.author.voice.channel.connect(cls=wavelink.Player)
+        except:
+            await ctx.send('You are not in a voice channel.')
+            return
 
     if ctx.author.voice.channel.id != voice_client.channel.id:
         await voice_client.disconnect(force=True)
@@ -163,8 +167,7 @@ async def status(ctx):
             color=discord.Color.blurple(),
         )
         embed.add_field(name='Position: ',
-                        value=datetime.datetime.utcfromtimestamp(ctx.voice_client.position).strftime(
-                            '%M:%S') if ctx.voice_client.position else 'PAUSED')
+                        value=datetime.datetime.utcfromtimestamp(ctx.voice_client.position).strftime('%M:%S'))
         embed.add_field(name='Duration', value=datetime.datetime.utcfromtimestamp(now_playing.length).strftime('%M:%S'))
         embed.add_field(name='Requested by', value=ctx.author.mention)
         embed.add_field(name='Next', value='Nothing' if not music_queue else music_queue[0].title)
@@ -293,9 +296,9 @@ async def skip(ctx):
     if not voice_client:
         await ctx.respond('I am not connected to a voice channel.')
         return
-    if not voice_client.is_playing():
-        await ctx.respond('I am not playing anything.')
-        return
+    # if not voice_client.is_playing():
+    #     await ctx.respond('I am not playing anything.')
+    #     return
     await voice_client.stop()
     await ctx.respond('Skipped.')
     try:
@@ -325,6 +328,9 @@ async def stop(ctx):
 @bot.slash_command(name='start_queue', description='Start the queue.')
 async def start_queue(ctx):
     global now_playing
+    if ctx.author.voice is None:
+        await ctx.respond('You are not connected to a voice channel.')
+        return
     if not now_playing:
         try:
             now_playing = music_queue.popleft()
