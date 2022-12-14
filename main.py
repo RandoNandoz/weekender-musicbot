@@ -4,6 +4,7 @@ Discord bot
 
 import datetime
 import random
+from os import environ
 from collections import deque
 
 import discord
@@ -35,8 +36,8 @@ async def connect_nodes():
         port=2333,
         password='youshallnotpass',
         spotify_client=spotify.SpotifyClient(
-            client_id='e72725c05bd840848210210782f9f84c',
-            client_secret='416f7f08bd8b4477a3a435570dbe6172'
+            client_id=environ.get('SPOTIFY_CLIENT_ID'),
+            client_secret=environ.get('SPOTIFY_CLIENT_SECRET')
         )
     )
 
@@ -384,5 +385,4 @@ async def help(ctx):
     )
 
 
-# bot.run(environ['DISCORD_TOKEN'])
-bot.run('MTA0NDc2MTMyMzAyNTcyNzUxOA.G2GADh.PXwo2poXWz8qOqQpJq5MARMcIqNR_u5hwHCQSk')
+bot.run(environ['DISCORD_TOKEN'])
