@@ -5,16 +5,19 @@ Discord bot
 import datetime
 import random
 from collections import deque
-from os import environ
 
 import discord
 import wavelink
 from discord import option
 from wavelink.ext import spotify
 
+# set debug guild to THE ID THE BOT is in
 bot = discord.Bot(command_prefix='/', debug_guilds=[1037132604408860732])
 
+# create a deque to store songs in queue
 music_queue = deque()
+
+# head of the queue
 now_playing = None
 
 
@@ -23,21 +26,24 @@ async def connect_nodes():
     Connect to Lavalink node(s).
     :return: None
     """
+    # wait for bot to be ready before audio connect
     await bot.wait_until_ready()
+    # connect to node & spotify api
     await wavelink.NodePool.create_node(
         bot=bot,
         host='127.0.0.1',
         port=2333,
         password='youshallnotpass',
         spotify_client=spotify.SpotifyClient(
-            client_id=environ.get('SPOTIFY_CLIENT_ID'),
-            client_secret=environ.get('SPOTIFY_CLIENT_SECRET')
+            client_id='e72725c05bd840848210210782f9f84c',
+            client_secret='416f7f08bd8b4477a3a435570dbe6172'
         )
     )
 
 
 @bot.event
 async def on_ready():
+    # connect to lavalink nodes
     await connect_nodes()
     print('Bot is ready.')
     print(f'Logged in as {bot.user.name}#{bot.user.discriminator} ({bot.user.id})')
@@ -48,6 +54,7 @@ async def on_wavelink_node_ready(node: wavelink.Node):
     print(f"{node.identifier} is ready.")  # print a message
 
 
+# on end of song, if the song finished normally, move to the next, unless the queue is empty
 @bot.event
 async def on_wavelink_track_end(player: wavelink.Player, track: wavelink.Track, reason):
     global now_playing
@@ -65,6 +72,7 @@ async def play(ctx, *, query: str):
     global now_playing
     voice_client = ctx.voice_client
 
+    # if the bot is not in a voice channel, join the user's voice channel
     if not voice_client:
         try:
             voice_client = await ctx.author.voice.channel.connect(cls=wavelink.Player)
@@ -72,9 +80,11 @@ async def play(ctx, *, query: str):
             await ctx.send('You are not in a voice channel.')
             return
 
+    # if the bot is in a voice channel, but not the same as the user's voice channel, send an error message
     if ctx.author.voice.channel.id != voice_client.channel.id:
         await voice_client.disconnect(force=True)
         voice_client = await ctx.author.voice.channel.connect(cls=wavelink.Player)
+
 
     song = await wavelink.YouTubeTrack.search(query=query, return_first=True)
     now_playing = song
@@ -353,4 +363,26 @@ async def disconnect(ctx):
     await ctx.respond('Disconnected.')
 
 
-bot.run(environ['DISCORD_TOKEN'])
+@bot.slash_command(name='help', description='Displays help')
+async def help(ctx):
+    ctx.respond(
+        'Commands:\n'
+        'play - Play a song.\n'
+        'queue - Display the queue.\n'
+        'clear_queue - Clear the queue.\n'
+        'remove - Remove a song from the queue.\n'
+        'remove_duplicates - Remove duplicate songs from the queue.\n'
+        'swap_queue - Swap two songs in the queue.\n'
+        'add - Add a song to the queue.\n'
+        'add_top - Add a song to the top of the queue.\n'
+        'shuffle - Shuffle the queue.\n'
+        'skip - Skip the current song.\n'
+        'stop - Stop the current song and clears the queue.\n'
+        'start_queue - Start the queue.\n'
+        'disconnect - Disconnect the bot from the voice channel and stop whatever is currently playing.\n'
+        'help - Displays help.'
+    )
+
+
+# bot.run(environ['DISCORD_TOKEN'])
+bot.run('MTA0NDc2MTMyMzAyNTcyNzUxOA.G2GADh.PXwo2poXWz8qOqQpJq5MARMcIqNR_u5hwHCQSk')
